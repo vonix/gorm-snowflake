@@ -1,4 +1,4 @@
-module github.com/omixen/gorm-snowflake
+module github.com/Kinoo3/gorm-snowflake
 
 go 1.15
 
