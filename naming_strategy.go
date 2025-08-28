@@ -1,6 +1,8 @@
 package snowflake
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"strings"
 
 	"gorm.io/gorm/schema"
@@ -51,4 +53,24 @@ func (sns NamingStrategy) CheckerName(table, column string) string {
 // IndexName snowflake edition
 func (sns NamingStrategy) IndexName(table, column string) string {
 	return sns.defaultNS.IndexName(table, column)
+}
+
+func (sns NamingStrategy) UniqueName(table, column string) string {
+    // Combine table + column
+    base := table + "_" + column
+
+    // Truncate if necessary
+    const max = 255
+    if len(base) <= max {
+        return base
+    }
+
+    // Hash the rest to keep deterministic and unique
+    sum := sha1.Sum([]byte(base))
+    tail := hex.EncodeToString(sum[:8]) // 16 chars
+    keep := max - 1 - len(tail)
+    if keep < 1 {
+        keep = 1
+    }
+    return base[:keep] + "_" + tail
 }
