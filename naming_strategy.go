@@ -47,7 +47,7 @@ func (sns NamingStrategy) SchemaName(table string) string {
 }
 
 func (sns NamingStrategy) JoinTableName(joinTable string) string {
-	return sns.defaultNS.JoinTableName(joinTable)
+	return strings.ToUpper(sns.defaultNS.JoinTableName(joinTable))
 }
 
 func (sns NamingStrategy) RelationshipFKName(rel schema.Relationship) string {
@@ -66,7 +66,7 @@ func (sns NamingStrategy) IndexName(table, column string) string {
 }
 
 func (sns NamingStrategy) UniqueName(table, column string) string {
-    base := table + "_" + column
+	base := table + "_" + column
 
-    return truncateWithHash(base)
+	return truncateWithHash(base)
 }
