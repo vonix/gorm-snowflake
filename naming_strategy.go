@@ -3,74 +3,70 @@ package snowflake
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"math"
 	"strings"
 
 	"gorm.io/gorm/schema"
 )
 
-// NamingStrategy for snowflake (always uppercase)
 type NamingStrategy struct {
 	defaultNS schema.Namer
 }
 
-// NewNamingStrategy create new instance of snowflake naming strat
 func NewNamingStrategy() schema.Namer {
 	return &NamingStrategy{
 		defaultNS: schema.NamingStrategy{},
 	}
 }
 
-// ColumnName snowflake edition
+const maxIdentifierLength = 255
+
+func truncateWithHash(name string) string {
+	name = strings.ToUpper(name)
+
+	if len(name) <= maxIdentifierLength {
+		return name
+	}
+	sum := sha1.Sum([]byte(name))
+	tail := hex.EncodeToString(sum[:8])
+	keep := int(math.Max(float64(maxIdentifierLength-1-len(tail)), 1))
+
+	return name[:keep] + "_" + tail
+}
+
 func (sns NamingStrategy) ColumnName(table, column string) string {
 	return strings.ToUpper(sns.defaultNS.ColumnName(table, column))
 }
 
-// TableName snowflake edition
 func (sns NamingStrategy) TableName(table string) string {
-	return sns.defaultNS.TableName(table)
+	return strings.ToUpper(sns.defaultNS.TableName(table))
 }
 
-// SchemaName snowflake edition
 func (sns NamingStrategy) SchemaName(table string) string {
-	return sns.defaultNS.SchemaName(table)
+	return strings.ToUpper(sns.defaultNS.SchemaName(table))
 }
 
-// JoinTableName snowflake edition
 func (sns NamingStrategy) JoinTableName(joinTable string) string {
 	return sns.defaultNS.JoinTableName(joinTable)
 }
 
-// RelationshipFKName snowflake edition
 func (sns NamingStrategy) RelationshipFKName(rel schema.Relationship) string {
-	return sns.defaultNS.RelationshipFKName(rel)
+	name := sns.defaultNS.RelationshipFKName(rel)
+	return truncateWithHash(name)
 }
 
-// CheckerName snowflake edition
 func (sns NamingStrategy) CheckerName(table, column string) string {
-	return sns.defaultNS.CheckerName(table, column)
+	name := sns.defaultNS.CheckerName(table, column)
+	return truncateWithHash(name)
 }
 
-// IndexName snowflake edition
 func (sns NamingStrategy) IndexName(table, column string) string {
-	return sns.defaultNS.IndexName(table, column)
+	name := sns.defaultNS.IndexName(table, column)
+	return truncateWithHash(name)
 }
 
 func (sns NamingStrategy) UniqueName(table, column string) string {
-    // Combine table + column
     base := table + "_" + column
 
-    // Truncate if necessary
-    const max = 255
-    if len(base) <= max {
-        return base
-    }
-
-    // Hash the rest to keep deterministic and unique
-    sum := sha1.Sum([]byte(base))
-    tail := hex.EncodeToString(sum[:8]) // 16 chars
-    keep := max - 1 - len(tail)
-    if keep < 1 {
-        keep = 1
-    }
-    return base[:keep] + "_" + tail
+    return truncateWithHash(base)
 }
