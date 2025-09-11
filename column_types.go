@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -72,7 +73,7 @@ func (n *normalizedColumnType) ScanType() reflect.Type {
 func (n *normalizedColumnType) DatabaseTypeName() string {
 	raw := n.c.DatabaseTypeName()
 	switch strings.ToUpper(raw) {
-	case "NUMBER":
+	case "NUMBER", "DECIMAL", "NUMERIC", "FIXED":
 		if _, scale, ok := n.c.DecimalSize(); ok && scale > 0 {
 			return "FLOAT"
 		}
@@ -80,8 +81,9 @@ func (n *normalizedColumnType) DatabaseTypeName() string {
 	case "TEXT":
 		return "VARCHAR"
 	case "BOOLEAN":
-		return "BOOL"
+		return "BOOLEAN"
 	default:
+		log.Error().Str("raw", raw).Msg("switch default")
 		return raw
 	}
 }
