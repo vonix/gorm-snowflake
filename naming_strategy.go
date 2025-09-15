@@ -35,7 +35,15 @@ func truncateWithHash(name string) string {
 }
 
 func (sns NamingStrategy) ColumnName(table, column string) string {
-	return strings.ToUpper(sns.defaultNS.ColumnName(table, column))
+	column = strings.ToUpper(sns.defaultNS.ColumnName(table, column))
+	reserved := map[string]struct{}{
+		"ORDER": {}, "LOCALITY": {},
+	}
+
+	if _, isReserved := reserved[column]; isReserved {
+		return `"` + column + `"`
+	}
+	return column
 }
 
 func (sns NamingStrategy) TableName(table string) string {
