@@ -11,6 +11,10 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+func normalizeName(s string) string {
+	return strings.ToUpper(strings.Trim(s, `"`))
+}
+
 type Migrator struct {
 	migrator.Migrator
 
@@ -22,9 +26,7 @@ type Migrator struct {
 	MigrateColumnFunc func(value interface{}, field *schema.Field, columnType gorm.ColumnType) error
 }
 
-// AutoMigrate remove index
 func (m Migrator) AutoMigrate(values ...interface{}) error {
-	// log.Info().Msg("AUTO MIGRATE")
 	for _, value := range m.ReorderModels(values, true) {
 		tx := m.DB.Session(&gorm.Session{})
 		if !tx.Migrator().HasTable(value) {
@@ -33,7 +35,6 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 			}
 		} else {
 			if err := m.RunWithValue(value, func(stmt *gorm.Statement) (errr error) {
-				// columnTypes, err := m.DB.Migrator().ColumnTypes(value)
 				columnTypes, err := m.DB.Migrator().ColumnTypes(value)
 
 				if err != nil {
@@ -42,9 +43,8 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 
 				for _, field := range stmt.Schema.FieldsByDBName {
 					var foundColumn gorm.ColumnType
-
 					for _, columnType := range columnTypes {
-						if columnType.Name() == field.DBName {
+						if normalizeName(columnType.Name()) == normalizeName(field.DBName) {
 							foundColumn = columnType
 							break
 						}
@@ -61,7 +61,6 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 					}
 				}
 
-				log.Info().Msg("BEFORE FOR")
 				for _, rel := range stmt.Schema.Relationships.Relations {
 					if !m.DB.Config.DisableForeignKeyConstraintWhenMigrating {
 						if constraint := rel.ParseConstraint(); constraint != nil {
@@ -86,7 +85,6 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 
 				return nil
 			}); err != nil {
-				log.Error().Interface("err", err).Msg("AAAAA")
 				return err
 			}
 		}
@@ -94,8 +92,6 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 
 	return nil
 }
-
-// - remove index (unsupported)
 
 func (m Migrator) CreateTable(values ...interface{}) error {
 	if m.CreateTableFunc != nil {
@@ -106,7 +102,7 @@ func (m Migrator) CreateTable(values ...interface{}) error {
 		tx := m.DB.Session(&gorm.Session{})
 		if err := m.RunWithValue(value, func(stmt *gorm.Statement) (errr error) {
 			var (
-				createTableSQL          = "CREATE TABLE ? ("
+				createTableSQL          = "CREATE TABLE IF NOT EXISTS ? ("
 				sqlValues               = []interface{}{m.CurrentTable(stmt)}
 				hasPrimaryKeyInDataType bool
 			)
@@ -163,7 +159,6 @@ func (m Migrator) CreateTable(values ...interface{}) error {
 	return nil
 }
 
-// HasTable modified for snowflake information_schema structure and convention (uppercased)
 func (m Migrator) HasTable(value interface{}) bool {
 	if m.HasTableFunc != nil {
 		return m.HasTableFunc(value)
@@ -171,17 +166,15 @@ func (m Migrator) HasTable(value interface{}) bool {
 
 	var count int64
 	m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		currentDatabase := m.DB.Migrator().CurrentDatabase()
 		return m.DB.Raw(
-			"SELECT count(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = ? AND table_catalog = ?",
-			strings.ToUpper(stmt.Table), currentDatabase,
+			"SELECT count(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_name = ?",
+			strings.ToUpper(stmt.Table),
 		).Row().Scan(&count)
 	})
 
 	return count > 0
 }
 
-// RenameTable no change
 func (m Migrator) RenameTable(oldName, newName interface{}) error {
 	var oldTable, newTable interface{}
 	if v, ok := oldName.(string); ok {
@@ -227,17 +220,14 @@ func (m Migrator) DropTable(values ...interface{}) error {
 func (m Migrator) HasColumn(value interface{}, field string) bool {
 	var count int64
 	m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		log.Info().Interface("stmt", stmt)
-		currentDatabase := m.DB.Migrator().CurrentDatabase()
 		name := field
-		log.Info().Interface("name", name)
 		if field := stmt.Schema.LookUpField(field); field != nil {
 			name = field.DBName
 		}
 
 		return m.DB.Raw(
-			"SELECT count(*) FROM INFORMATION_SCHEMA.columns WHERE table_catalog = ? AND table_name = ? AND column_name = ?",
-			currentDatabase, strings.ToUpper(stmt.Table), strings.ToUpper(name),
+			"SELECT count(*) FROM INFORMATION_SCHEMA.columns WHERE table_name = ? AND column_name = ?",
+			normalizeName(stmt.Table), normalizeName(name),
 		).Row().Scan(&count)
 	})
 
@@ -250,6 +240,10 @@ func (m Migrator) MigrateColumn(value interface{}, field *schema.Field, columnTy
 	}
 
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		//Snowflake doesnt allow to alter, add or remove identity columns
+		if field.AutoIncrement {
+			return nil
+		}
 		var alterClauses []string
 		var sqlArgs []interface{}
 
@@ -360,8 +354,8 @@ func (m Migrator) HasConstraint(value interface{}, name string) bool {
 	var count int64
 	m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		return m.DB.Raw(
-			`SELECT count(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME = ?  AND TABLE_NAME = ? AND TABLE_CATALOG = ?;`,
-			strings.ToUpper(name), strings.ToUpper(stmt.Table), m.CurrentDatabase(),
+			`SELECT count(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME = ?  AND TABLE_NAME = ?`,
+			strings.ToUpper(name), strings.ToUpper(stmt.Table),
 		).Row().Scan(&count)
 	})
 	return count > 0
@@ -371,12 +365,6 @@ func (m Migrator) HasConstraint(value interface{}, name string) bool {
 func (m Migrator) CreateConstraint(value interface{}, name string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		constraint, table := m.GuessConstraintAndTable(stmt, name)
-		// if chk != nil {
-		// 	return m.DB.Exec(
-		// 		"ALTER TABLE ? ADD CONSTRAINT ? CHECK (?)",
-		// 		m.CurrentTable(stmt), clause.Column{Name: chk.Name}, clause.Expr{SQL: chk.Constraint},
-		// 	).Error
-		// }
 
 		if constraint != nil {
 			var vars = []interface{}{clause.Table{Name: table}}
@@ -392,17 +380,15 @@ func (m Migrator) CreateConstraint(value interface{}, name string) error {
 }
 
 // DropConstraint no change
-// func (m Migrator) DropConstraint(value interface{}, name string) error {
-// 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-// 		constraint, chk, table := m.GuessConstraintAndTable(stmt, name)
-// 		if constraint != nil {
-// 			name = constraint.Name
-// 		} else if chk != nil {
-// 			name = chk.Name
-// 		}
-// 		return m.DB.Exec("ALTER TABLE ? DROP CONSTRAINT ?", clause.Table{Name: table}, clause.Column{Name: name}).Error
-// 	})
-// }
+func (m Migrator) DropConstraint(value interface{}, name string) error {
+	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		constraint, table := m.GuessConstraintAndTable(stmt, name)
+		if constraint != nil {
+			name = constraint.Name
+		}
+		return m.DB.Exec("ALTER TABLE ? DROP CONSTRAINT ?", clause.Table{Name: table}, clause.Column{Name: name}).Error
+	})
+}
 
 func (m Migrator) GuessConstraintAndTable(stmt *gorm.Statement, name string) (_ *schema.Constraint, table string) {
 	if stmt.Schema == nil {

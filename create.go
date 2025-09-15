@@ -1,12 +1,9 @@
 package snowflake
 
 import (
-	"reflect"
-
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
-	"gorm.io/gorm/schema"
 )
 
 func Create(db *gorm.DB) {
@@ -90,78 +87,78 @@ func Create(db *gorm.DB) {
 			_ = db.AddError(err)
 		}
 
-		// do another select on last inserted values to populate default values (e.g. ID)
-		// this relies on the result of SELECT * FROM CHANGES to align with the order of the VALUES in MERGE statement
-		if sch := db.Statement.Schema; sch != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
-			var (
-				fields = make([]*schema.Field, len(sch.FieldsWithDefaultDBValue))
-				values = make([]interface{}, len(sch.FieldsWithDefaultDBValue))
-			)
+		// // do another select on last inserted values to populate default values (e.g. ID)
+		// // this relies on the result of SELECT * FROM CHANGES to align with the order of the VALUES in MERGE statement
+		// if sch := db.Statement.Schema; sch != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {
+		// 	var (
+		// 		fields = make([]*schema.Field, len(sch.FieldsWithDefaultDBValue))
+		// 		values = make([]interface{}, len(sch.FieldsWithDefaultDBValue))
+		// 	)
 
-			db.Statement.SQL.Reset()
+		// 	db.Statement.SQL.Reset()
 
-			// write select
-			db.Statement.WriteString("SELECT ")
-			// populate fields
-			for idx, field := range sch.FieldsWithDefaultDBValue {
-				if idx > 0 {
-					db.Statement.WriteByte(',')
-				}
+		// 	// write select
+		// 	db.Statement.WriteString("SELECT ")
+		// 	// populate fields
+		// 	for idx, field := range sch.FieldsWithDefaultDBValue {
+		// 		if idx > 0 {
+		// 			db.Statement.WriteByte(',')
+		// 		}
 
-				fields[idx] = field
-				db.Statement.WriteQuoted(field.DBName)
-			}
-			db.Statement.WriteString(" FROM ")
-			db.Statement.WriteQuoted(db.Statement.Table)
-			db.Statement.WriteString(" CHANGES(INFORMATION => APPEND_ONLY) BEFORE(statement=>LAST_QUERY_ID());")
-			rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
-			reflectIndex := 0
-			if err == nil {
-				defer rows.Close()
+		// 		fields[idx] = field
+		// 		db.Statement.WriteQuoted(field.DBName)
+		// 	}
+		// 	db.Statement.WriteString(" FROM ")
+		// 	db.Statement.WriteQuoted(db.Statement.Table)
+		// 	db.Statement.WriteString(" CHANGES(INFORMATION => APPEND_ONLY) BEFORE(statement=>LAST_QUERY_ID());")
+		// 	rows, err := db.Statement.ConnPool.QueryContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
+		// 	reflectIndex := 0
+		// 	if err == nil {
+		// 		defer rows.Close()
 
-				switch db.Statement.ReflectValue.Kind() {
-				case reflect.Slice, reflect.Array:
-					// the strategy here is to match the returned rows with INSERT only values
-					for rows.Next() {
-					BEGIN:
-						reflectValue := db.Statement.ReflectValue.Index(reflectIndex)
-						if reflect.Indirect(reflectValue).Kind() != reflect.Struct {
-							break
-						}
+		// 		switch db.Statement.ReflectValue.Kind() {
+		// 		case reflect.Slice, reflect.Array:
+		// 			// the strategy here is to match the returned rows with INSERT only values
+		// 			for rows.Next() {
+		// 			BEGIN:
+		// 				reflectValue := db.Statement.ReflectValue.Index(reflectIndex)
+		// 				if reflect.Indirect(reflectValue).Kind() != reflect.Struct {
+		// 					break
+		// 				}
 
-						for idx, field := range fields {
-							fieldValue := field.ReflectValueOf(db.Statement.Context, reflectValue)
+		// 				for idx, field := range fields {
+		// 					fieldValue := field.ReflectValueOf(db.Statement.Context, reflectValue)
 
-							// skip where default are zeros (non-insert in MERGE)
-							if !fieldValue.IsZero() {
-								reflectIndex++
+		// 					// skip where default are zeros (non-insert in MERGE)
+		// 					if !fieldValue.IsZero() {
+		// 						reflectIndex++
 
-								if reflectIndex >= db.Statement.ReflectValue.Len() {
-									return
-								}
+		// 						if reflectIndex >= db.Statement.ReflectValue.Len() {
+		// 							return
+		// 						}
 
-								goto BEGIN
-							}
-							values[idx] = fieldValue.Addr().Interface()
-						}
+		// 						goto BEGIN
+		// 					}
+		// 					values[idx] = fieldValue.Addr().Interface()
+		// 				}
 
-						if err := rows.Scan(values...); err != nil {
-							_ = db.AddError(err)
-						}
-					}
-				case reflect.Struct:
-					for idx, field := range fields {
-						values[idx] = field.ReflectValueOf(db.Statement.Context, db.Statement.ReflectValue).Addr().Interface()
-					}
+		// 				if err := rows.Scan(values...); err != nil {
+		// 					_ = db.AddError(err)
+		// 				}
+		// 			}
+		// 		case reflect.Struct:
+		// 			for idx, field := range fields {
+		// 				values[idx] = field.ReflectValueOf(db.Statement.Context, db.Statement.ReflectValue).Addr().Interface()
+		// 			}
 
-					if rows.Next() {
-						db.AddError(rows.Scan(values...))
-					}
-				}
-			} else {
-				db.AddError(err)
-			}
-		}
+		// 			if rows.Next() {
+		// 				db.AddError(rows.Scan(values...))
+		// 			}
+		// 		}
+		// 	} else {
+		// 		db.AddError(err)
+		// 	}
+		// }
 	}
 }
 

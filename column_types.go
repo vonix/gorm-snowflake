@@ -78,12 +78,14 @@ func (n *normalizedColumnType) DatabaseTypeName() string {
 			return "FLOAT"
 		}
 		return "BIGINT"
-	case "TEXT":
-		return "VARCHAR"
+	case "TEXT", "VARCHAR":
+		return "TEXT"
 	case "BOOLEAN":
 		return "BOOLEAN"
+	case "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ", "DATE", "TIME":
+		return raw
 	default:
-		log.Error().Str("raw", raw).Msg("switch default")
+		log.Error().Str("raw", raw).Msg("snowflake DatabaseTypeName switch default for type:")
 		return raw
 	}
 }
