@@ -1,4 +1,4 @@
-module github.com/Kinoo3/gorm-snowflake
+module github.com/vonix/gorm-snowflake
 
 go 1.22.0
 

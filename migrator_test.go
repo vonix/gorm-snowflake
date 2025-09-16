@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	snowflake "github.com/Kinoo3/gorm-snowflake"
 	"github.com/stretchr/testify/require"
+	snowflake "github.com/vonix/gorm-snowflake"
 	"gorm.io/gorm"
 )
 

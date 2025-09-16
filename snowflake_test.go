@@ -3,7 +3,7 @@ package snowflake_test
 import (
 	"testing"
 
-	snowflake "github.com/Kinoo3/gorm-snowflake"
+	snowflake "github.com/vonix/gorm-snowflake"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
 )
