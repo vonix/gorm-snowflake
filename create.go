@@ -1,6 +1,7 @@
 package snowflake
 
 import (
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
@@ -70,8 +71,7 @@ func Create(db *gorm.DB) {
 
 					db.Statement.WriteString(";")
 				} else {
-					// only one autoincrement column
-					db.Statement.WriteString("VALUES (DEFAULT);")
+					log.Warn().Msg("NOT INSERTING, empty columns")
 				}
 			}
 		}
@@ -80,13 +80,13 @@ func Create(db *gorm.DB) {
 	if !db.DryRun && db.Error == nil {
 		db.RowsAffected = 0
 
-		// exec the merge/insert first
 		if result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...); err == nil {
 			db.RowsAffected, _ = result.RowsAffected()
 		} else {
 			_ = db.AddError(err)
 		}
-
+		//UNCOMMENT IN CASE ITS NEEDED TO GET THE RESULTS OF THE INSERT BACK.
+		//REQUIRES change tracking as true on the tables
 		// // do another select on last inserted values to populate default values (e.g. ID)
 		// // this relies on the result of SELECT * FROM CHANGES to align with the order of the VALUES in MERGE statement
 		// if sch := db.Statement.Schema; sch != nil && len(db.Statement.Schema.FieldsWithDefaultDBValue) > 0 {

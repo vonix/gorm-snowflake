@@ -301,6 +301,14 @@ func (m Migrator) MigrateColumn(value interface{}, field *schema.Field, columnTy
 	})
 }
 
+func (m Migrator) AddColumn(value interface{}, field string) error {
+	if m.AddColumnFunc != nil {
+		return m.AddColumnFunc(value, field)
+	}
+
+	return m.Migrator.AddColumn(value, field)
+}
+
 // AlterColumn no change
 func (m Migrator) AlterColumn(value interface{}, field string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {

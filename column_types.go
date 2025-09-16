@@ -9,6 +9,10 @@ import (
 )
 
 func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
+	if m.ColumnTypesFunc != nil {
+		return m.ColumnTypesFunc(value)
+	}
+
 	cols, err := m.Migrator.ColumnTypes(value)
 	if err != nil {
 		return nil, err

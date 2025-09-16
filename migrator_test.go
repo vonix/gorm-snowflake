@@ -47,9 +47,11 @@ func TestAutoMigrate_CreatesTableWhenItDoesNotExist(t *testing.T) {
 	require.True(t, hasTableCalled, "HasTable should have been called")
 	require.True(t, createTableCalled, "CreateTable should have been called because HasTable returned false")
 }
+
 func TestAutoMigrate_DoesNotCreateTableWhenItExists(t *testing.T) {
 	var createTableCalled bool
 	var hasTableCalled bool
+	var addColumnCallCount int
 
 	mockCreateTable := func(values ...interface{}) error {
 		createTableCalled = true
@@ -61,6 +63,16 @@ func TestAutoMigrate_DoesNotCreateTableWhenItExists(t *testing.T) {
 		return true
 	}
 
+	mockAddColumn := func(value interface{}, field string) error {
+		addColumnCallCount++
+		return nil
+	}
+
+	mockColumnTypes := func(value interface{}) ([]gorm.ColumnType, error) {
+		emptySliceNoColumns := []gorm.ColumnType{}
+		return emptySliceNoColumns, nil
+	}
+
 	mockDb, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer mockDb.Close()
@@ -68,6 +80,8 @@ func TestAutoMigrate_DoesNotCreateTableWhenItExists(t *testing.T) {
 	dialector := snowflake.New(snowflake.Config{
 		CreateTableFunc: mockCreateTable,
 		HasTableFunc:    mockHasTable,
+		AddColumnFunc:   mockAddColumn,
+		ColumnTypesFunc: mockColumnTypes,
 		Conn:            mockDb,
 	})
 
@@ -79,25 +93,25 @@ func TestAutoMigrate_DoesNotCreateTableWhenItExists(t *testing.T) {
 
 	require.True(t, hasTableCalled, "HasTable should have been called")
 	require.False(t, createTableCalled, "CreateTable should not have been called because HasTable returned true")
+	require.Equal(t, 2, addColumnCallCount, "AddColumn should be called for ID and Name fields")
 }
 
-// func TestHasColumnSQL(t *testing.T) {
-// 	db, err := gorm.Open(snowflake.Open("fake-dsn"), &gorm.Config{
-// 		DryRun: true,
-// 	})
+func TestHasColumn_GeneratesCorrectSQL(t *testing.T) {
+	mockDb, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer mockDb.Close()
 
-// 	if err != nil {
-// 		t.Errorf("error connecting to db")
-// 	}
-// 	// require.NoError(t, err)
+	dialector := snowflake.New(snowflake.Config{
+		Conn: mockDb,
+	})
 
-// 	stmt := db.Session(&gorm.Session{DryRun: true}).
-// 		Raw("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?", "CALLS", "STATUS_CAUSE").
-// 		Statement
+	db, err := gorm.Open(dialector, &gorm.Config{})
+	require.NoError(t, err)
 
-// 	sql := stmt.SQL.String()
-// 	t.Errorf("expected NULL, got %s", sql)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM INFORMATION_SCHEMA.columns WHERE table_name = \? AND column_name = \?`).
+		WithArgs("USERS", "NAME").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-// 	// require.Contains(t, strings.ToUpper(sql), "INFORMATION_SCHEMA.COLUMNS")
-// 	// require.Contains(t, sql, "STATUS_CAUSE")
-// }
+	has := db.Migrator().HasColumn(&User{}, "Name")
+	require.True(t, has)
+}
