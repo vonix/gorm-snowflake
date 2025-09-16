@@ -24,7 +24,7 @@ import (
     "fmt"
     "log"
 
-    snowflake "github.com/Kinoo3/gorm-snowflake"
+    snowflake "github.com/vonix/gorm-snowflake"
     "gorm.io/gorm"
 )
 
