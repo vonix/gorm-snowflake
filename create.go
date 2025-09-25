@@ -201,31 +201,23 @@ func MergeCreate(db *gorm.DB, onConflict clause.OnConflict, values clause.Values
 
 	db.Statement.WriteString(" WHEN NOT MATCHED THEN INSERT (")
 
-	written := false
-	for _, column := range values.Columns {
-		if db.Statement.Schema.PrioritizedPrimaryField == nil || !db.Statement.Schema.PrioritizedPrimaryField.AutoIncrement || db.Statement.Schema.PrioritizedPrimaryField.DBName != column.Name {
-			if written {
-				db.Statement.WriteByte(',')
-			}
-			written = true
-			db.Statement.WriteQuoted(column.Name)
+	for i, column := range values.Columns {
+		if i > 0 {
+			db.Statement.WriteByte(',')
 		}
+		db.Statement.WriteQuoted(column.Name)
 	}
 
 	db.Statement.WriteString(") VALUES (")
 
-	written = false
-	for _, column := range values.Columns {
-		if db.Statement.Schema.PrioritizedPrimaryField == nil || !db.Statement.Schema.PrioritizedPrimaryField.AutoIncrement || db.Statement.Schema.PrioritizedPrimaryField.DBName != column.Name {
-			if written {
-				db.Statement.WriteByte(',')
-			}
-			written = true
-			db.Statement.WriteQuoted(clause.Column{
-				Table: "excluded",
-				Name:  column.Name,
-			})
+	for i, column := range values.Columns {
+		if i > 0 {
+			db.Statement.WriteByte(',')
 		}
+		db.Statement.WriteQuoted(clause.Column{
+			Table: "excluded",
+			Name:  column.Name,
+		})
 	}
 
 	db.Statement.WriteString(")")
