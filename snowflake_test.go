@@ -1,6 +1,11 @@
 package snowflake_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"strings"
 	"testing"
 
 	snowflake "github.com/vonix/gorm-snowflake"
@@ -8,7 +13,7 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-func getExprSQL(t *testing.T, expr clause.Expression) (sql string, vars []interface{}) {
+func getExprSQL(t *testing.T, expr clause.Expression) (sql string, vars []any) {
 	t.Helper()
 	e, ok := expr.(clause.Expr)
 	if !ok {
@@ -86,4 +91,291 @@ func TestDefaultValueOf_BooleanTrue(t *testing.T) {
 	if sql != want {
 		t.Errorf("expected %s, got %s", want, sql)
 	}
+}
+func TestOpenWithKey_ValidKey(t *testing.T) {
+	validPEMKey := generateTestRSAKey(t)
+
+	dialector, err := snowflake.OpenWithKey(
+		"test-account",
+		"test-user",
+		validPEMKey,
+		"test-database",
+		"test-schema",
+		"test-warehouse",
+		"test-role",
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if dialector == nil {
+		t.Fatal("expected dialector to be non-nil")
+	}
+
+	if dialector.Name() != "snowflake" {
+		t.Errorf("expected dialector name to be 'snowflake', got %s", dialector.Name())
+	}
+}
+
+func TestOpenWithKey_InvalidPEMFormat(t *testing.T) {
+	invalidPEMKey := "not-a-valid-pem-key"
+
+	_, err := snowflake.OpenWithKey(
+		"test-account",
+		"test-user",
+		invalidPEMKey,
+		"test-database",
+		"test-schema",
+		"test-warehouse",
+		"test-role",
+	)
+
+	if err == nil {
+		t.Fatal("expected error for invalid PEM format, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "missing PEM header or footer markers") {
+		t.Errorf("expected error to contain 'missing PEM header or footer markers', got %v", err)
+	}
+}
+
+func TestOpenWithKey_MissingRequiredFields(t *testing.T) {
+	validPEMKey := generateTestRSAKey(t)
+
+	testCases := []struct {
+		name        string
+		account     string
+		user        string
+		privateKey  string
+		database    string
+		expectedErr string
+	}{
+		{
+			name:        "missing account",
+			account:     "",
+			user:        "test-user",
+			privateKey:  validPEMKey,
+			database:    "test-database",
+			expectedErr: "account is required",
+		},
+		{
+			name:        "missing user",
+			account:     "test-account",
+			user:        "",
+			privateKey:  validPEMKey,
+			database:    "test-database",
+			expectedErr: "user is required",
+		},
+		{
+			name:        "missing private key",
+			account:     "test-account",
+			user:        "test-user",
+			privateKey:  "",
+			database:    "test-database",
+			expectedErr: "privateKeyPEM is required",
+		},
+		{
+			name:        "missing database",
+			account:     "test-account",
+			user:        "test-user",
+			privateKey:  validPEMKey,
+			database:    "",
+			expectedErr: "database is required",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := snowflake.OpenWithKey(
+				tc.account,
+				tc.user,
+				tc.privateKey,
+				tc.database,
+				"test-schema",
+				"test-warehouse",
+				"test-role",
+			)
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if !strings.Contains(err.Error(), tc.expectedErr) {
+				t.Errorf("expected error to contain '%s', got %v", tc.expectedErr, err)
+			}
+		})
+	}
+}
+
+func TestOpenWithKey_EdgeCaseValidation(t *testing.T) {
+	validPEMKey := generateTestRSAKey(t)
+
+	testCases := []struct {
+		name        string
+		account     string
+		user        string
+		privateKey  string
+		database    string
+		expectedErr string
+	}{
+		{
+			name:        "whitespace only account",
+			account:     "   ",
+			user:        "test-user",
+			privateKey:  validPEMKey,
+			database:    "test-database",
+			expectedErr: "account cannot be only whitespace",
+		},
+		{
+			name:        "whitespace only user",
+			account:     "test-account",
+			user:        "   ",
+			privateKey:  validPEMKey,
+			database:    "test-database",
+			expectedErr: "user cannot be only whitespace",
+		},
+		{
+			name:        "whitespace only private key",
+			account:     "test-account",
+			user:        "test-user",
+			privateKey:  "   ",
+			database:    "test-database",
+			expectedErr: "privateKeyPEM cannot be only whitespace",
+		},
+		{
+			name:        "whitespace only database",
+			account:     "test-account",
+			user:        "test-user",
+			privateKey:  validPEMKey,
+			database:    "   ",
+			expectedErr: "database cannot be only whitespace",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := snowflake.OpenWithKey(
+				tc.account,
+				tc.user,
+				tc.privateKey,
+				tc.database,
+				"test-schema",
+				"test-warehouse",
+				"test-role",
+			)
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if !strings.Contains(err.Error(), tc.expectedErr) {
+				t.Errorf("expected error to contain '%s', got %v", tc.expectedErr, err)
+			}
+		})
+	}
+}
+
+func TestOpenWithKey_MalformedPEMKeys(t *testing.T) {
+	testCases := []struct {
+		name        string
+		privateKey  string
+		expectedErr string
+	}{
+		{
+			name:        "no PEM markers",
+			privateKey:  "this is not a PEM key at all",
+			expectedErr: "missing PEM header or footer markers",
+		},
+		{
+			name:        "incomplete PEM header",
+			privateKey:  "-----BEGIN PRIVATE KEY\ndata\n-----END PRIVATE KEY-----",
+			expectedErr: "no valid PEM block found in input",
+		},
+		{
+			name:        "wrong PEM block type",
+			privateKey:  "-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END CERTIFICATE-----",
+			expectedErr: "expected 'PRIVATE KEY' or 'RSA PRIVATE KEY', got 'CERTIFICATE'",
+		},
+		{
+			name:        "empty PEM block",
+			privateKey:  "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+			expectedErr: "PEM block contains no data",
+		},
+		{
+			name:        "corrupted PEM data",
+			privateKey:  "-----BEGIN PRIVATE KEY-----\ninvalid-base64-data!!!\n-----END PRIVATE KEY-----",
+			expectedErr: "no valid PEM block found in input",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := snowflake.OpenWithKey(
+				"test-account",
+				"test-user",
+				tc.privateKey,
+				"test-database",
+				"test-schema",
+				"test-warehouse",
+				"test-role",
+			)
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if !strings.Contains(err.Error(), tc.expectedErr) {
+				t.Errorf("expected error to contain '%s', got %v", tc.expectedErr, err)
+			}
+		})
+	}
+}
+
+func TestOpenWithKey_SmallKeySize(t *testing.T) {
+	smallKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("failed to generate small RSA key: %v", err)
+	}
+
+	smallKeyBytes := x509.MarshalPKCS1PrivateKey(smallKey)
+	smallKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: smallKeyBytes,
+	})
+
+	_, err = snowflake.OpenWithKey(
+		"test-account",
+		"test-user",
+		string(smallKeyPEM),
+		"test-database",
+		"test-schema",
+		"test-warehouse",
+		"test-role",
+	)
+
+	if err == nil {
+		t.Fatal("expected error for small key size, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "1024 bits is too small") {
+		t.Errorf("expected error about key size, got %v", err)
+	}
+}
+
+func generateTestRSAKey(t *testing.T) string {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+
+	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	})
+
+	return string(privateKeyPEM)
 }

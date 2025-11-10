@@ -1,23 +1,44 @@
 package snowflake
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/snowflakedb/gosnowflake"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/migrator"
 	"gorm.io/gorm/schema"
-
-	_ "github.com/snowflakedb/gosnowflake"
 )
 
 const (
 	SnowflakeDriverName = "snowflake"
+)
+
+var (
+	ErrInvalidPEMFormat     = errors.New("invalid PEM format: private key must be in valid PEM format")
+	ErrMissingRequiredField = errors.New("missing required field for key-pair authentication")
+	ErrKeyParsingFailed     = errors.New("failed to parse private key")
+	ErrEmptyPrivateKey      = errors.New("private key cannot be empty")
+	ErrUnsupportedKeyType   = errors.New("unsupported private key type: only RSA keys are supported")
+	ErrKeyValidationFailed  = errors.New("private key validation failed")
+
+	ErrInvalidAccount   = errors.New("invalid account: account name cannot be empty or contain invalid characters")
+	ErrInvalidUser      = errors.New("invalid user: username cannot be empty")
+	ErrInvalidDatabase  = errors.New("invalid database: database name cannot be empty")
+	ErrConnectionFailed = errors.New("failed to establish connection with key-pair authentication")
+
+	ErrMalformedPEMBlock   = errors.New("malformed PEM block: no valid PEM data found")
+	ErrInvalidPEMBlockType = errors.New("invalid PEM block type: expected PRIVATE KEY or RSA PRIVATE KEY")
 )
 
 type Dialector struct {
@@ -28,12 +49,13 @@ type Config struct {
 	DriverName string
 	DSN        string
 	Conn       gorm.ConnPool
+	Connector  driver.Connector //connector support for key-pair auth
 
 	// For testing purposes
 	CreateTableFunc   func(values ...interface{}) error
 	HasTableFunc      func(value interface{}) bool
-	ColumnTypesFunc   func(value interface{}) ([]gorm.ColumnType, error) // Add this
-	AddColumnFunc     func(value interface{}, field string) error        // Add this
+	ColumnTypesFunc   func(value interface{}) ([]gorm.ColumnType, error)
+	AddColumnFunc     func(value interface{}, field string) error
 	MigrateColumnFunc func(value interface{}, field *schema.Field, columnType gorm.ColumnType) error
 }
 
@@ -54,28 +76,170 @@ func New(config Config) gorm.Dialector {
 	return &Dialector{Config: &config}
 }
 
-func (dialector Dialector) Initialize(db *gorm.DB) (err error) {
+func OpenWithKey(account, user, privateKeyPEM, database, schema, warehouse, role string) (gorm.Dialector, error) {
+	if err := validateConnectionParameters(account, user, privateKeyPEM, database); err != nil {
+		return nil, err
+	}
 
+	privateKey, err := parsePEMPrivateKey(privateKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	config := &gosnowflake.Config{
+		Account:       account,
+		User:          user,
+		Database:      database,
+		Schema:        schema,
+		Warehouse:     warehouse,
+		Role:          role,
+		Authenticator: gosnowflake.AuthTypeJwt,
+		PrivateKey:    privateKey,
+	}
+
+	connector := gosnowflake.NewConnector(gosnowflake.SnowflakeDriver{}, *config)
+
+	return &Dialector{
+		Config: &Config{
+			DriverName: SnowflakeDriverName,
+			Connector:  connector,
+		},
+	}, nil
+}
+
+func validateConnectionParameters(account, user, privateKeyPEM, database string) error {
+	if account == "" {
+		return fmt.Errorf("%w: account is required", ErrInvalidAccount)
+	}
+	if strings.TrimSpace(account) == "" {
+		return fmt.Errorf("%w: account cannot be only whitespace", ErrInvalidAccount)
+	}
+
+	if user == "" {
+		return fmt.Errorf("%w: user is required", ErrInvalidUser)
+	}
+	if strings.TrimSpace(user) == "" {
+		return fmt.Errorf("%w: user cannot be only whitespace", ErrInvalidUser)
+	}
+
+	if privateKeyPEM == "" {
+		return fmt.Errorf("%w: privateKeyPEM is required", ErrEmptyPrivateKey)
+	}
+	if strings.TrimSpace(privateKeyPEM) == "" {
+		return fmt.Errorf("%w: privateKeyPEM cannot be only whitespace", ErrEmptyPrivateKey)
+	}
+
+	if database == "" {
+		return fmt.Errorf("%w: database is required", ErrInvalidDatabase)
+	}
+	if strings.TrimSpace(database) == "" {
+		return fmt.Errorf("%w: database cannot be only whitespace", ErrInvalidDatabase)
+	}
+
+	return nil
+}
+
+func parsePEMPrivateKey(privateKeyPEM string) (*rsa.PrivateKey, error) {
+	trimmedPEM := strings.TrimSpace(privateKeyPEM)
+	if trimmedPEM == "" {
+		return nil, fmt.Errorf("%w: private key string is empty after trimming whitespace", ErrEmptyPrivateKey)
+	}
+
+	if !strings.Contains(trimmedPEM, "-----BEGIN") || !strings.Contains(trimmedPEM, "-----END") {
+		return nil, fmt.Errorf("%w: missing PEM header or footer markers", ErrMalformedPEMBlock)
+	}
+
+	block, _ := pem.Decode([]byte(trimmedPEM))
+	if block == nil {
+		return nil, fmt.Errorf("%w: no valid PEM block found in input", ErrMalformedPEMBlock)
+	}
+
+	if block.Type != "PRIVATE KEY" && block.Type != "RSA PRIVATE KEY" {
+		return nil, fmt.Errorf("%w: expected 'PRIVATE KEY' or 'RSA PRIVATE KEY', got '%s'", ErrInvalidPEMBlockType, block.Type)
+	}
+
+	if len(block.Bytes) == 0 {
+		return nil, fmt.Errorf("%w: PEM block contains no data", ErrMalformedPEMBlock)
+	}
+
+	var privateKey *rsa.PrivateKey
+	var err error
+
+	if block.Type == "PRIVATE KEY" {
+		parsedKey, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if parseErr != nil {
+			return nil, fmt.Errorf("%w: failed to parse PKCS#8 private key: %v", ErrKeyParsingFailed, parseErr)
+		}
+
+		var ok bool
+		privateKey, ok = parsedKey.(*rsa.PrivateKey)
+		if !ok {
+			keyType := "unknown"
+			switch parsedKey.(type) {
+			case *rsa.PrivateKey:
+				keyType = "RSA"
+			default:
+				keyType = fmt.Sprintf("%T", parsedKey)
+			}
+			return nil, fmt.Errorf("%w: found %s key, but only RSA keys are supported", ErrUnsupportedKeyType, keyType)
+		}
+	} else {
+		privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to parse PKCS#1 RSA private key: %v", ErrKeyParsingFailed, err)
+		}
+	}
+
+	if err := privateKey.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: RSA key structure validation failed: %v", ErrKeyValidationFailed, err)
+	}
+
+	keySize := privateKey.N.BitLen()
+	if keySize < 2048 {
+		return nil, fmt.Errorf("%w: RSA key size %d bits is too small, minimum 2048 bits required", ErrKeyValidationFailed, keySize)
+	}
+
+	return privateKey, nil
+}
+
+func (dialector Dialector) Initialize(db *gorm.DB) error {
 	db.Config.NamingStrategy = NewNamingStrategy()
-
 	callbacks.RegisterDefaultCallbacks(db, &callbacks.Config{})
 	_ = db.Callback().Create().Replace("gorm:create", Create)
 
 	dialector.DriverName = SnowflakeDriverName
 
-	if dialector.Conn != nil {
-		db.ConnPool = dialector.Conn
-	} else {
-		db.ConnPool, err = sql.Open(dialector.DriverName, dialector.DSN)
-		if err != nil {
-			return err
-		}
+	connPool, err := dialector.createConnectionPool()
+	if err != nil {
+		return err
 	}
 
-	// for k, v := range dialector.ClauseBuilders() {
-	// 	db.ClauseBuilders[k] = v
-	// }
-	return
+	db.ConnPool = connPool
+	return nil
+}
+
+func (dialector Dialector) createConnectionPool() (gorm.ConnPool, error) {
+	if dialector.Conn != nil {
+		return dialector.Conn, nil
+	}
+
+	if dialector.Connector != nil {
+		connPool := sql.OpenDB(dialector.Connector)
+		if connPool == nil {
+			return nil, fmt.Errorf("%w: failed to create connection pool with key-pair authentication", ErrConnectionFailed)
+		}
+		return connPool, nil
+	}
+
+	if dialector.DSN != "" {
+		connPool, err := sql.Open(dialector.DriverName, dialector.DSN)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open DSN connection: %w", err)
+		}
+		return connPool, nil
+	}
+
+	return nil, errors.New("no connection information provided: must specify either Conn, Connector, or DSN")
 }
 
 // func (dialector Dialector) ClauseBuilders() map[string]clause.ClauseBuilder {

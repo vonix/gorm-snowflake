@@ -50,3 +50,82 @@ func main() {
     _ = db
 }
 ```
+
+### Key-Pair Authentication
+
+For enhanced security, you can use RSA key-pair authentication instead of passwords:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    snowflake "github.com/vonix/gorm-snowflake"
+    "gorm.io/gorm"
+)
+
+func main() {
+    privateKeyPEM := `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC...
+-----END PRIVATE KEY-----`
+
+    dialector := snowflake.OpenWithKey(
+        "YOUR_ACCOUNT",     
+        "YOUR_USER",        
+        privateKeyPEM,      
+        "YOUR_DATABASE",    
+        "YOUR_SCHEMA",      
+        "YOUR_WAREHOUSE",   
+        "YOUR_ROLE",        
+    )
+
+    db, err := gorm.Open(dialector, &gorm.Config{})
+    if err != nil {
+        log.Fatalf("failed to connect to Snowflake with key-pair auth: %v", err)
+    }
+
+    fmt.Println("Successfully connected to Snowflake with key-pair authentication!")
+    _ = db
+}
+```
+
+#### Setting Up Key-Pair Authentication
+
+1. **Generate RSA Key Pair:**
+   ```bash
+   # Generate private key
+   openssl genrsa -out snowflake_key.pem 2048
+   
+   # Generate public key
+   openssl rsa -in snowflake_key.pem -pubout -out snowflake_key.pub
+   ```
+
+2. **Register Public Key with Snowflake:**
+   ```sql
+   ALTER USER your_username SET RSA_PUBLIC_KEY='MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...';
+   ```
+
+3. **Load Private Key in Your Application:**
+   ```go
+   privateKeyBytes, err := os.ReadFile("snowflake_key.pem")
+   if err != nil {
+       log.Fatal(err)
+   }
+   privateKeyPEM := string(privateKeyBytes)
+   
+   privateKeyPEM := os.Getenv("SNOWFLAKE_PRIVATE_KEY")
+   ```
+
+**Security Notes:**
+- Store private keys securely (environment variables, secret management systems)
+- Never commit private keys to version control
+
+## Authentication Methods
+
+| Method | Security | Setup Complexity |
+|--------|----------|------------------|
+| **Password (DSN)** | Basic | Low |
+| **Key-Pair** | High | Medium |
+```
