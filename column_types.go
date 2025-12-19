@@ -77,9 +77,14 @@ func (n *normalizedColumnType) ScanType() reflect.Type {
 func (n *normalizedColumnType) DatabaseTypeName() string {
 	raw := n.c.DatabaseTypeName()
 	switch strings.ToUpper(raw) {
-	case "NUMBER", "DECIMAL", "NUMERIC", "FIXED":
+	case "NUMBER", "DECIMAL", "NUMERIC":
 		if _, scale, ok := n.c.DecimalSize(); ok && scale > 0 {
 			return "FLOAT"
+		}
+		return "BIGINT"
+	case "FIXED":
+		if _, scale, ok := n.c.DecimalSize(); ok && scale > 0 {
+			return "DECIMAL"
 		}
 		return "BIGINT"
 	case "TEXT", "VARCHAR":
